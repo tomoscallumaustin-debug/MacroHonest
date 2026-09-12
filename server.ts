@@ -36,6 +36,119 @@ function getGenAI(): GoogleGenAI {
   return aiClient;
 }
 
+// Clean and extract human-friendly error messages from Gemini ApiError
+function extractCleanErrorMessage(error: any): string {
+  if (!error) return "An unexpected error occurred.";
+  let msg = typeof error === "string" ? error : error.message || "";
+
+  if (msg.includes('{"error"') || msg.trim().startsWith("{")) {
+    try {
+      const jsonStart = msg.indexOf("{");
+      const jsonEnd = msg.lastIndexOf("}");
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        const parsed = JSON.parse(msg.slice(jsonStart, jsonEnd + 1));
+        if (parsed.error?.message) {
+          msg = parsed.error.message;
+        } else if (parsed.message) {
+          msg = parsed.message;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (
+    msg.includes("503") ||
+    msg.toLowerCase().includes("high demand") ||
+    msg.toLowerCase().includes("unavailable") ||
+    msg.toLowerCase().includes("overloaded") ||
+    error?.status === 503 ||
+    error?.code === 503
+  ) {
+    return "The AI service is temporarily experiencing high demand. Please try again in a few moments or use manual logging.";
+  }
+
+  if (
+    msg.includes("429") ||
+    msg.toLowerCase().includes("quota") ||
+    msg.toLowerCase().includes("rate limit") ||
+    error?.status === 429 ||
+    error?.code === 429
+  ) {
+    return "AI rate limit reached. Please wait a few moments and try again.";
+  }
+
+  if (
+    msg.includes("GEMINI_API_KEY") ||
+    msg.includes("API key") ||
+    msg.toLowerCase().includes("unauthenticated") ||
+    error?.status === 401 ||
+    error?.status === 403
+  ) {
+    return "Gemini API key is not configured or is invalid on the server.";
+  }
+
+  return msg || "Failed to process AI request. Please try again.";
+}
+
+/**
+ * Robust Gemini model invoker with exponential backoff and model fallbacks.
+ * Prevents transient 503 "High Demand" errors on gemini-3.8-flash from failing requests.
+ */
+async function generateWithRetryAndFallback(
+  ai: GoogleGenAI,
+  request: {
+    contents: any;
+    config?: any;
+    models?: string[];
+  }
+) {
+  const modelsToTry = request.models || [
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+  ];
+
+  let lastError: any = null;
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i];
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: request.contents,
+          config: request.config,
+        });
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        const errStr = String(err?.message || err || "");
+        const isTransient =
+          errStr.includes("503") ||
+          errStr.includes("UNAVAILABLE") ||
+          errStr.includes("high demand") ||
+          errStr.includes("overloaded") ||
+          err?.status === 503 ||
+          err?.code === 503 ||
+          errStr.includes("429");
+
+        console.warn(`[Gemini] ${model} attempt ${attempt} error: ${errStr.slice(0, 100)}`);
+
+        if (isTransient && attempt === 1) {
+          // brief pause before retry
+          await new Promise((r) => setTimeout(r, 750));
+          continue;
+        }
+        break; // break to next model
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -163,8 +276,7 @@ Scientific reference:
 
 Provide a transparent, scientifically honest response. Do NOT prescribe dangerously low calories (minimum 1200 kcal for women, 1500 kcal for men unless medically supervised). Ensure protein is sufficient for muscle retention (~1.6 to 2.2 g/kg depending on training and diet). Calculate realistic grams of protein, carbs, and fat so that: (protein * 4) + (carbs * 4) + (fat * 9) closely matches total calories.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+    const response = await generateWithRetryAndFallback(ai, {
       contents: prompt,
       config: {
         systemInstruction:
@@ -202,7 +314,7 @@ Provide a transparent, scientifically honest response. Do NOT prescribe dangerou
       source: "gemini_ai",
     });
   } catch (error: any) {
-    console.error("Target calculation error:", error);
+    console.error("Target calculation error:", error?.message || error);
     // Graceful fallback to formula
     const fallback = calculateFallbackTargets({
       age: Number(req.body.age || 28),
@@ -223,10 +335,18 @@ Provide a transparent, scientifically honest response. Do NOT prescribe dangerou
 // AI Macro Coach Chat endpoint
 app.post("/api/coach-chat", async (req, res) => {
   try {
-    const { messages = [], currentContext = {} } = req.body;
+    const { messages = [], currentContext = {}, attachedPhotoBase64, attachedPhotoMime = "image/jpeg" } = req.body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "No messages provided." });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({
+        error: "GEMINI_API_KEY is not configured on the server.",
+        fallbackReply:
+          "I'm operating in offline mode because the server does not have GEMINI_API_KEY configured. You can check your remaining macros on the dashboard!",
+      });
     }
 
     const ai = getGenAI();
@@ -254,13 +374,31 @@ Response Guidelines:
     // Map conversation turns into Gemini format
     // Keep last 10 messages for context
     const recentMessages = messages.slice(-10);
-    const contents = recentMessages.map((msg: { role: string; content: string }) => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }],
-    }));
+    const contents = recentMessages.map((msg: { role: string; content: string }, idx: number) => {
+      const parts: Array<any> = [];
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      // If photo attached on latest user message, send inlineData
+      if (idx === recentMessages.length - 1 && msg.role === "user" && attachedPhotoBase64) {
+        const cleanedPhoto = attachedPhotoBase64.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, "").trim();
+        if (cleanedPhoto) {
+          parts.push({
+            inlineData: {
+              mimeType: attachedPhotoMime,
+              data: cleanedPhoto,
+            },
+          });
+        }
+      }
+
+      parts.push({ text: msg.content });
+
+      return {
+        role: msg.role === "assistant" ? "model" : "user",
+        parts,
+      };
+    });
+
+    const response = await generateWithRetryAndFallback(ai, {
       contents,
       config: {
         systemInstruction,
@@ -271,11 +409,12 @@ Response Guidelines:
     const reply = response.text || "I'm here to help with your macros and meals. What's on your mind?";
     return res.json({ reply });
   } catch (error: any) {
-    console.error("AI Coach Chat error:", error);
-    return res.status(500).json({
-      error: error?.message || "Failed to reach Macro Coach. Please try again.",
-      fallbackReply:
-        "I'm temporarily having trouble connecting to the AI service, but you can still check your remaining macros on your dashboard! Let me know if you want recipe ideas or macro tips.",
+    console.error("AI Coach Chat error:", error?.message || error);
+    const cleanMsg = extractCleanErrorMessage(error);
+    const remaining = req.body?.currentContext?.remaining || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    return res.json({
+      reply: `I'm temporarily experiencing a traffic spike from the AI service, but here's your honest status: you have **${remaining.calories} kcal** remaining today (Protein: **${remaining.protein}g**, Carbs: **${remaining.carbs}g**, Fat: **${remaining.fat}g**). High-protein staples like Greek yogurt, eggs, or chicken breast are great choices right now! Feel free to ask again in a moment.`,
+      error: cleanMsg,
     });
   }
 });
@@ -288,6 +427,12 @@ app.post("/api/analyze-meal", async (req, res) => {
     if (!text && !imageBase64) {
       return res.status(400).json({
         error: "Please provide either a meal description text or an image.",
+      });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({
+        error: "GEMINI_API_KEY is not configured on the server.",
       });
     }
 
@@ -310,13 +455,15 @@ Crucial Honesty Guidelines:
 
     if (imageBase64) {
       // Clean base64 header if included
-      const cleanedBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, "");
-      parts.push({
-        inlineData: {
-          mimeType,
-          data: cleanedBase64,
-        },
-      });
+      const cleanedBase64 = imageBase64.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, "").trim();
+      if (cleanedBase64) {
+        parts.push({
+          inlineData: {
+            mimeType,
+            data: cleanedBase64,
+          },
+        });
+      }
     }
 
     const promptText = text
@@ -325,8 +472,7 @@ Crucial Honesty Guidelines:
 
     parts.push({ text: promptText });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+    const response = await generateWithRetryAndFallback(ai, {
       contents: { parts },
       config: {
         systemInstruction,
@@ -405,18 +551,16 @@ Crucial Honesty Guidelines:
     const parsedData = JSON.parse(responseText.trim());
     return res.json(parsedData);
   } catch (error: any) {
-    console.error("Error analyzing meal with Gemini:", error);
+    console.error("Error analyzing meal with Gemini:", error?.message || error);
+    const cleanError = extractCleanErrorMessage(error);
+    const isHighDemand =
+      cleanError.toLowerCase().includes("high demand") ||
+      cleanError.toLowerCase().includes("unavailable") ||
+      error?.status === 503;
 
-    // Provide friendly fallback if API key is missing or quota/network error
-    const isApiKeyMissing =
-      !process.env.GEMINI_API_KEY ||
-      error?.message?.includes("GEMINI_API_KEY") ||
-      error?.message?.includes("API key");
-
-    return res.status(500).json({
-      error: isApiKeyMissing
-        ? "Gemini API key is not set or valid. You can still log manually or search our verified food database."
-        : error?.message || "Failed to analyze meal. Please adjust manually.",
+    return res.status(503).json({
+      error: cleanError,
+      isHighDemand,
       canFallbackManual: true,
     });
   }

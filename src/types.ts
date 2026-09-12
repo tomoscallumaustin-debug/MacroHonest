@@ -2,6 +2,12 @@ export type MealType = "breakfast" | "lunch" | "dinner" | "snack";
 
 export type ConfidenceScore = "High" | "Medium" | "Estimated";
 
+export interface DailyHydration {
+  date: string; // YYYY-MM-DD
+  amountMl: number;
+  goalMl: number;
+}
+
 export interface FoodItemBreakdown {
   name: string;
   portion: string;

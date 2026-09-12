@@ -11,6 +11,7 @@ import {
   Plus,
   Loader2,
   Info,
+  RotateCcw,
 } from "lucide-react";
 import {
   AiAnalysisResult,
@@ -20,20 +21,33 @@ import {
   MealType,
 } from "../types";
 import { TranslationStrings } from "../utils/translations";
+import { analyzeMeal } from "../services/aiService";
+import {
+  extractCleanErrorMessage,
+  estimateMealNutrientsHeuristically,
+} from "../utils/nutritionEstimator";
 
 interface AiMealLoggerProps {
   selectedDate: string;
   onMealLogged: (meal: LoggedMeal) => void;
+  externalPrompt?: string;
   t: TranslationStrings;
 }
 
 export const AiMealLogger: React.FC<AiMealLoggerProps> = ({
   selectedDate,
   onMealLogged,
+  externalPrompt,
   t,
 }) => {
   const [mealText, setMealText] = useState("");
   const [mealType, setMealType] = useState<MealType>("lunch");
+
+  React.useEffect(() => {
+    if (externalPrompt) {
+      setMealText(externalPrompt);
+    }
+  }, [externalPrompt]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState<string>("image/jpeg");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -107,21 +121,11 @@ export const AiMealLogger: React.FC<AiMealLoggerProps> = ({
     setAnalysisResult(null);
 
     try {
-      const response = await fetch("/api/analyze-meal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: promptToUse.trim() || undefined,
-          imageBase64: imagePreview || undefined,
-          mimeType: imageMime,
-        }),
+      const data = await analyzeMeal({
+        text: promptToUse.trim() || undefined,
+        imageBase64: imagePreview || undefined,
+        mimeType: imageMime,
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Analysis failed");
-      }
 
       setAnalysisResult(data);
       setEditName(data.mealName);
@@ -131,13 +135,25 @@ export const AiMealLogger: React.FC<AiMealLoggerProps> = ({
       setEditFat(data.fatGrams);
       setMealType(typeToUse);
     } catch (err: any) {
-      console.error("AI analysis error:", err);
-      setAnalysisError(
-        err.message || "Failed to analyze meal. You can use manual entry."
-      );
+      console.error("AI analysis error:", err?.message || err);
+      const cleanMsg = extractCleanErrorMessage(err);
+      setAnalysisError(cleanMsg);
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // Instant heuristic estimate when AI is temporarily congested
+  const handleInstantEstimate = () => {
+    if (!mealText.trim()) return;
+    const estimate = estimateMealNutrientsHeuristically(mealText.trim());
+    setAnalysisResult(estimate);
+    setEditName(estimate.mealName);
+    setEditCalories(estimate.totalCalories);
+    setEditProtein(estimate.proteinGrams);
+    setEditCarbs(estimate.carbsGrams);
+    setEditFat(estimate.fatGrams);
+    setAnalysisError(null);
   };
 
   // Save the analyzed or edited meal to daily log
@@ -336,18 +352,38 @@ export const AiMealLogger: React.FC<AiMealLoggerProps> = ({
 
           {/* Error notice & instant fallback */}
           {analysisError && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-medium">{analysisError}</p>
-                <button
-                  type="button"
-                  onClick={() => startManualMode(mealText)}
-                  className="mt-1.5 inline-flex items-center gap-1 text-emerald-400 hover:underline font-semibold"
-                >
-                  <Plus className="w-3 h-3" />
-                  Continue with manual entry
-                </button>
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2">
+                <p className="font-medium text-amber-200 leading-relaxed">{analysisError}</p>
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAnalyzeMeal()}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 font-semibold transition"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Try again
+                  </button>
+                  {mealText.trim().length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleInstantEstimate}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-medium transition"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-400" />
+                      Quick Estimate (Offline)
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => startManualMode(mealText)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-zinc-400 hover:text-zinc-200 font-medium transition"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Manual entry
+                  </button>
+                </div>
               </div>
             </div>
           )}

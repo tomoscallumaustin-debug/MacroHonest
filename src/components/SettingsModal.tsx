@@ -13,6 +13,7 @@ import {
   FileCode,
   Calculator,
   Sparkles,
+  HelpCircle,
 } from "lucide-react";
 import { SupportedLanguage, UserSettings } from "../types";
 import { TranslationStrings } from "../utils/translations";
@@ -26,6 +27,7 @@ interface SettingsModalProps {
   onExportCsv: () => void;
   onResetMeals: () => void;
   onOpenGuide?: () => void;
+  onOpenWelcome?: () => void;
   t: TranslationStrings;
 }
 
@@ -38,6 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onExportCsv,
   onResetMeals,
   onOpenGuide,
+  onOpenWelcome,
   t,
 }) => {
   const [calories, setCalories] = useState(settings.targets.calories);
@@ -294,6 +297,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>{t.exportDataCsv}</span>
               </button>
             </div>
+
+            {onOpenWelcome && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenWelcome();
+                }}
+                className="w-full mt-1 p-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 transition"
+              >
+                <HelpCircle className="w-4 h-4 text-emerald-400" />
+                <span>How to Use MacroHonest (Welcome Tour)</span>
+              </button>
+            )}
 
             <button
               type="button"

@@ -12,9 +12,16 @@ import {
   Flame,
   ShieldCheck,
   RotateCcw,
+  Camera,
+  Image as ImageIcon,
 } from "lucide-react";
 import { ChatMessage, LoggedMeal, MacroTargets } from "../types";
 import { TranslationStrings } from "../utils/translations";
+import { sendCoachChat } from "../services/aiService";
+
+interface ExtendedChatMessage extends ChatMessage {
+  photoPreview?: string;
+}
 
 interface AiCoachChatProps {
   isOpen: boolean;
@@ -58,7 +65,7 @@ Right now on **${selectedDate}**, you've logged **${consumed.calories} / ${targe
 
 How can I help today? You can ask for meal ideas that fit your exact remaining macros, ingredient swaps, plateau troubleshooting, or practical nutrition advice!`;
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const [messages, setMessages] = useState<ExtendedChatMessage[]>([
     {
       id: "welcome-1",
       role: "assistant",
@@ -68,8 +75,14 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
   ]);
 
   const [inputMessage, setInputMessage] = useState("");
+  const [attachedPhoto, setAttachedPhoto] = useState<{
+    base64: string;
+    mimeType: string;
+    preview: string;
+  } | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto scroll to bottom
   const scrollToBottom = () => {
@@ -81,6 +94,24 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
       scrollToBottom();
     }
   }, [messages, isOpen]);
+
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const mimeType = file.type || "image/jpeg";
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      setAttachedPhoto({
+        base64: result,
+        mimeType,
+        preview: result,
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
   if (!isOpen) return null;
 
@@ -104,66 +135,60 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
   ];
 
   const handleSendMessage = async (userText: string) => {
-    if (!userText.trim() || isTyping) return;
+    if ((!userText.trim() && !attachedPhoto) || isTyping) return;
 
-    const userMsg: ChatMessage = {
+    const promptText = userText.trim() || (attachedPhoto ? "Can you analyze this food photo and tell me if it fits my remaining macros?" : "");
+
+    const userMsg: ExtendedChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
-      content: userText.trim(),
+      content: promptText,
+      photoPreview: attachedPhoto?.preview,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInputMessage("");
+    const currentPhoto = attachedPhoto;
+    setAttachedPhoto(null);
     setIsTyping(true);
 
     try {
-      const response = await fetch("/api/coach-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({
-            role: m.role,
-            content: m.content,
+      const result = await sendCoachChat({
+        messages: newMessages,
+        currentContext: {
+          date: selectedDate,
+          targets,
+          consumed,
+          remaining,
+          loggedMealsToday: meals.map((m) => ({
+            name: m.name,
+            calories: m.calories,
+            proteinGrams: m.proteinGrams,
+            carbsGrams: m.carbsGrams,
+            fatGrams: m.fatGrams,
           })),
-          currentContext: {
-            date: selectedDate,
-            targets,
-            consumed,
-            remaining,
-            loggedMealsToday: meals.map((m) => ({
-              name: m.name,
-              calories: m.calories,
-              proteinGrams: m.proteinGrams,
-              carbsGrams: m.carbsGrams,
-              fatGrams: m.fatGrams,
-            })),
-          },
-        }),
+        },
+        attachedPhotoBase64: currentPhoto?.base64,
+        attachedPhotoMime: currentPhoto?.mimeType,
       });
 
-      const data = await response.json();
-      const replyText =
-        data.reply ||
-        data.fallbackReply ||
-        "I'm here to support your nutrition journey. Let me know what questions you have!";
-
-      const assistantMsg: ChatMessage = {
+      const assistantMsg: ExtendedChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        content: replyText,
+        content: result.reply,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (error: any) {
       console.error(error);
-      const errorReply: ChatMessage = {
+      const errorReply: ExtendedChatMessage = {
         id: `assistant-err-${Date.now()}`,
         role: "assistant",
         content:
-          "I'm having a little trouble connecting right now. Remember: hitting your daily protein target and maintaining sustainable consistency is 90% of the battle! Try asking again in a moment.",
+          "I'm here to support you! Remember: hitting your daily protein target and maintaining sustainable consistency is 90% of the battle. Feel free to ask anything about your macros or meals.",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, errorReply]);
@@ -255,12 +280,21 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
                 )}
 
                 <div
-                  className={`max-w-[85%] rounded-2xl p-3 space-y-1 ${
+                  className={`max-w-[85%] rounded-2xl p-3 space-y-2 ${
                     isUser
                       ? "bg-emerald-500 text-zinc-950 font-medium rounded-tr-xs"
                       : "bg-zinc-950/80 text-zinc-200 border border-zinc-800/80 rounded-tl-xs"
                   }`}
                 >
+                  {msg.photoPreview && (
+                    <div className="rounded-xl overflow-hidden border border-black/20 max-w-[200px] max-h-[160px]">
+                      <img
+                        src={msg.photoPreview}
+                        alt="Attached food"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
                   <p className="whitespace-pre-line">{msg.content}</p>
                   <span
                     className={`block text-[9px] text-right ${
@@ -309,6 +343,30 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
           ))}
         </div>
 
+        {/* Staged Photo Attachment Preview */}
+        {attachedPhoto && (
+          <div className="px-3.5 pt-2 pb-1 bg-zinc-900 flex items-center gap-2 border-t border-zinc-800/60">
+            <div className="relative inline-block rounded-lg overflow-hidden border border-zinc-700 bg-zinc-950">
+              <img
+                src={attachedPhoto.preview}
+                alt="Staged photo"
+                className="w-12 h-12 object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => setAttachedPhoto(null)}
+                className="absolute top-0.5 right-0.5 p-0.5 bg-black/80 hover:bg-black text-zinc-300 rounded-full transition"
+                title="Remove photo"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+            <span className="text-[11px] text-zinc-400">
+              Food photo attached for visual AI coaching
+            </span>
+          </div>
+        )}
+
         {/* Input Bar */}
         <div className="p-3 border-t border-zinc-800 bg-zinc-900 shrink-0">
           <form
@@ -319,15 +377,31 @@ How can I help today? You can ask for meal ideas that fit your exact remaining m
             className="flex items-center gap-2"
           >
             <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handlePhotoSelect}
+              accept="image/*"
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 transition active:scale-95 shrink-0"
+              title="Attach food photo or label"
+              aria-label="Attach photo"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
+            <input
               type="text"
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Ask your coach anything about nutrition..."
+              placeholder={attachedPhoto ? "Ask about this photo or leave blank..." : "Ask your coach anything about nutrition..."}
               className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-hidden focus:border-emerald-500"
             />
             <button
               type="submit"
-              disabled={!inputMessage.trim() || isTyping}
+              disabled={(!inputMessage.trim() && !attachedPhoto) || isTyping}
               className="p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 disabled:opacity-40 transition active:scale-95 shrink-0"
               aria-label="Send message"
             >

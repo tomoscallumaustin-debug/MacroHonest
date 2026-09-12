@@ -8,16 +8,22 @@ import { HonestPricingModal } from "./components/HonestPricingModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { CalorieGuideModal } from "./components/CalorieGuideModal";
 import { AiCoachChat } from "./components/AiCoachChat";
+import { HydrationTracker } from "./components/HydrationTracker";
+import { WeeklyInsights } from "./components/WeeklyInsights";
+import { WelcomeModal } from "./components/WelcomeModal";
 import { LoggedMeal, MacroTargets, SupportedLanguage, UserSettings } from "./types";
 import { TRANSLATIONS } from "./utils/translations";
 import {
+  clearDailyWater,
   exportMealsAsCsv,
   exportMealsAsJson,
   getTodayDateString,
+  hasSeenWelcome,
   loadMeals,
   loadSettings,
   saveMeals,
   saveSettings,
+  setSeenWelcome,
 } from "./utils/storage";
 import {
   Search,
@@ -40,8 +46,17 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isCoachOpen, setIsCoachOpen] = useState(false);
+  const [isWelcomeOpen, setIsWelcomeOpen] = useState(() => !hasSeenWelcome());
+  const [samplePrompt, setSamplePrompt] = useState<string>("");
 
   const t = TRANSLATIONS[settings.language] || TRANSLATIONS.en;
+
+  const handleSampleMealSelect = (sampleText: string) => {
+    setSamplePrompt(sampleText);
+    setTimeout(() => {
+      window.scrollTo({ top: 350, behavior: "smooth" });
+    }, 100);
+  };
 
   // Persist meals whenever updated
   useEffect(() => {
@@ -100,6 +115,8 @@ export default function App() {
   const handleResetMeals = () => {
     if (window.confirm(t.deleteConfirm)) {
       setMeals([]);
+      saveMeals([]);
+      clearDailyWater();
       setIsSettingsOpen(false);
     }
   };
@@ -115,6 +132,7 @@ export default function App() {
         onOpenPricing={() => setIsPricingOpen(true)}
         onOpenGuide={() => setIsGuideOpen(true)}
         onOpenCoach={() => setIsCoachOpen(true)}
+        onOpenWelcome={() => setIsWelcomeOpen(true)}
         onLanguageChange={(lang: SupportedLanguage) =>
           setSettings((prev) => ({ ...prev, language: lang }))
         }
@@ -130,13 +148,23 @@ export default function App() {
               Zero Ads • Local-First • Transparent AI
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsPricingOpen(true)}
-            className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold underline underline-offset-2"
-          >
-            No Traps
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsWelcomeOpen(true)}
+              className="text-[11px] text-zinc-400 hover:text-emerald-300 font-medium transition"
+            >
+              How it works
+            </button>
+            <span className="text-zinc-700">•</span>
+            <button
+              type="button"
+              onClick={() => setIsPricingOpen(true)}
+              className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold underline underline-offset-2"
+            >
+              No Traps
+            </button>
+          </div>
         </div>
 
         {/* AI Quick Assistant Row (Guide & Coach Launchers) */}
@@ -189,10 +217,14 @@ export default function App() {
         {/* 1. Daily Dashboard Ring & Macro Bars */}
         <DailyRing meals={dayMeals} targets={settings.targets} t={t} />
 
+        {/* Daily Hydration Tracker */}
+        <HydrationTracker selectedDate={selectedDate} t={t} />
+
         {/* 2. AI Photo/Text Meal Logger */}
         <AiMealLogger
           selectedDate={selectedDate}
           onMealLogged={handleMealLogged}
+          externalPrompt={samplePrompt}
           t={t}
         />
 
@@ -207,6 +239,15 @@ export default function App() {
             <span>Search Verified USDA Database</span>
           </button>
         </div>
+
+        {/* Weekly Insights & 7-Day Macro Trends */}
+        <WeeklyInsights
+          meals={meals}
+          targets={settings.targets}
+          selectedDate={selectedDate}
+          onDateSelect={setSelectedDate}
+          t={t}
+        />
 
         {/* 3. Daily Logged Meals List */}
         <div>
@@ -310,6 +351,7 @@ export default function App() {
         onExportCsv={() => exportMealsAsCsv(meals)}
         onResetMeals={handleResetMeals}
         onOpenGuide={() => setIsGuideOpen(true)}
+        onOpenWelcome={() => setIsWelcomeOpen(true)}
         t={t}
       />
 
@@ -329,6 +371,20 @@ export default function App() {
         selectedDate={selectedDate}
         targets={settings.targets}
         meals={dayMeals}
+        t={t}
+      />
+
+      {/* New User Welcome & Walkthrough Tour */}
+      <WelcomeModal
+        isOpen={isWelcomeOpen}
+        onClose={() => {
+          setIsWelcomeOpen(false);
+          setSeenWelcome(true);
+        }}
+        onOpenGuide={() => setIsGuideOpen(true)}
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenCoach={() => setIsCoachOpen(true)}
+        onSampleMealSelect={handleSampleMealSelect}
         t={t}
       />
     </div>

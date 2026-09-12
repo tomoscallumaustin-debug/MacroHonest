@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { CalculatedTargetsResult, MacroTargets, UserProfileInputs } from "../types";
 import { TranslationStrings } from "../utils/translations";
+import { calculateTargets } from "../services/aiService";
 
 interface CalorieGuideModalProps {
   isOpen: boolean;
@@ -148,17 +149,7 @@ export const CalorieGuideModal: React.FC<CalorieGuideModalProps> = ({
         notes: notes.trim() || undefined,
       };
 
-      const response = await fetch("/api/calculate-targets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to calculate targets.");
-      }
-
-      const data: CalculatedTargetsResult = await response.json();
+      const data = await calculateTargets(payload);
       setResult(data);
     } catch (err: any) {
       console.error(err);

@@ -8,6 +8,7 @@ import {
   Globe,
   Calculator,
   Bot,
+  HelpCircle,
 } from "lucide-react";
 import { SupportedLanguage, UserSettings } from "../types";
 import { TRANSLATIONS } from "../utils/translations";
@@ -21,6 +22,7 @@ interface HeaderProps {
   onOpenPricing: () => void;
   onOpenGuide: () => void;
   onOpenCoach: () => void;
+  onOpenWelcome?: () => void;
   onLanguageChange: (lang: SupportedLanguage) => void;
 }
 
@@ -32,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenPricing,
   onOpenGuide,
   onOpenCoach,
+  onOpenWelcome,
   onLanguageChange,
 }) => {
   const t = TRANSLATIONS[settings.language] || TRANSLATIONS.en;
@@ -149,6 +152,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <ShieldCheck className="w-3.5 h-3.5" />
           </button>
+
+          {/* Help / Welcome Guide Button */}
+          {onOpenWelcome && (
+            <button
+              type="button"
+              onClick={onOpenWelcome}
+              className="p-1.5 text-zinc-400 hover:text-emerald-300 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 rounded-lg transition"
+              title="How to Use MacroHonest (Welcome Guide)"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {/* Settings Button */}
           <button

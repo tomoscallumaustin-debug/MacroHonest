@@ -2,6 +2,9 @@ import { LoggedMeal, UserSettings } from "../types";
 
 const MEALS_STORAGE_KEY = "macrohonest_meals_v1";
 const SETTINGS_STORAGE_KEY = "macrohonest_settings_v1";
+const HYDRATION_STORAGE_KEY = "macrohonest_hydration_v1";
+
+export const DEFAULT_WATER_GOAL_ML = 2500;
 
 export const DEFAULT_SETTINGS: UserSettings = {
   targets: {
@@ -85,96 +88,14 @@ export function loadMeals(): LoggedMeal[] {
   try {
     const raw = localStorage.getItem(MEALS_STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Strip out any legacy dummy/demo meals if previously loaded
+        return parsed.filter((m) => !m.id?.startsWith("demo-"));
+      }
     }
-    // Seed initial clean demo meal for today so user immediately sees how MacroHonest works
-    const today = getTodayDateString();
-    const initialMeals: LoggedMeal[] = [
-      {
-        id: "demo-breakfast",
-        date: today,
-        time: "08:15",
-        mealType: "breakfast",
-        name: "Avocado Toast with Two Poached Eggs",
-        calories: 440,
-        proteinGrams: 19,
-        carbsGrams: 34,
-        fatGrams: 26,
-        confidenceScore: "High",
-        confidenceReason: "Standard whole ingredients: 2 eggs + 1 sourdough slice + 1/2 avocado.",
-        honestTip: "Avocado is nutrient-rich with heart-healthy monounsaturated fat.",
-        items: [
-          {
-            name: "Whole Eggs (Poached)",
-            portion: "2 large eggs",
-            calories: 144,
-            proteinGrams: 12.6,
-            carbsGrams: 0.8,
-            fatGrams: 9.8,
-          },
-          {
-            name: "Artisan Sourdough",
-            portion: "1 thick slice (50g)",
-            calories: 122,
-            proteinGrams: 4.5,
-            carbsGrams: 24,
-            fatGrams: 0.6,
-          },
-          {
-            name: "Hass Avocado",
-            portion: "1/2 medium (100g)",
-            calories: 160,
-            proteinGrams: 2,
-            carbsGrams: 8.5,
-            fatGrams: 14.7,
-          },
-        ],
-        loggedVia: "ai_text",
-      },
-      {
-        id: "demo-lunch",
-        date: today,
-        time: "12:45",
-        mealType: "lunch",
-        name: "Grilled Chicken & Quinoa Nourish Bowl",
-        calories: 565,
-        proteinGrams: 48,
-        carbsGrams: 52,
-        fatGrams: 15,
-        confidenceScore: "Medium",
-        confidenceReason: "Visible grains & grilled chicken breast; ~1 tbsp olive oil estimated in dressing.",
-        honestTip: "Dressing estimation adds ~110 kcal. Adjust oil grams if you dressed it lightly.",
-        items: [
-          {
-            name: "Chicken Breast (Grilled)",
-            portion: "150g fillet",
-            calories: 248,
-            proteinGrams: 46.5,
-            carbsGrams: 0,
-            fatGrams: 5.4,
-          },
-          {
-            name: "Quinoa (Cooked)",
-            portion: "1 cup (185g)",
-            calories: 222,
-            proteinGrams: 8.1,
-            carbsGrams: 39.4,
-            fatGrams: 3.5,
-          },
-          {
-            name: "Olive Oil Vinaigrette",
-            portion: "1 tbsp (~10g oil)",
-            calories: 95,
-            proteinGrams: 0,
-            carbsGrams: 0.5,
-            fatGrams: 10,
-          },
-        ],
-        loggedVia: "ai_photo",
-      },
-    ];
-    saveMeals(initialMeals);
-    return initialMeals;
+    // Brand-new users start completely empty (0 calories consumed, full remaining budget)
+    return [];
   } catch (e) {
     console.error("Error reading meals from localStorage", e);
     return [];
@@ -226,3 +147,72 @@ export function exportMealsAsCsv(meals: LoggedMeal[]): void {
   downloadAnchor.click();
   downloadAnchor.remove();
 }
+
+export function loadDailyWater(date: string): { amountMl: number; goalMl: number } {
+  try {
+    const raw = localStorage.getItem(HYDRATION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && parsed[date]) {
+        return {
+          amountMl: Number(parsed[date].amountMl) || 0,
+          goalMl: Number(parsed[date].goalMl) || DEFAULT_WATER_GOAL_ML,
+        };
+      }
+    }
+    return { amountMl: 0, goalMl: DEFAULT_WATER_GOAL_ML };
+  } catch (e) {
+    console.error("Error reading hydration from localStorage", e);
+    return { amountMl: 0, goalMl: DEFAULT_WATER_GOAL_ML };
+  }
+}
+
+export function saveDailyWater(date: string, amountMl: number, goalMl: number): void {
+  try {
+    const raw = localStorage.getItem(HYDRATION_STORAGE_KEY);
+    const existing = raw ? JSON.parse(raw) : {};
+    existing[date] = {
+      amountMl: Math.max(0, Math.round(amountMl)),
+      goalMl: Math.max(500, Math.round(goalMl)),
+    };
+    localStorage.setItem(HYDRATION_STORAGE_KEY, JSON.stringify(existing));
+  } catch (e) {
+    console.error("Error saving hydration to localStorage", e);
+  }
+}
+
+export function clearDailyWater(date?: string): void {
+  try {
+    if (!date) {
+      localStorage.removeItem(HYDRATION_STORAGE_KEY);
+      return;
+    }
+    const raw = localStorage.getItem(HYDRATION_STORAGE_KEY);
+    if (raw) {
+      const existing = JSON.parse(raw);
+      delete existing[date];
+      localStorage.setItem(HYDRATION_STORAGE_KEY, JSON.stringify(existing));
+    }
+  } catch (e) {
+    console.error("Error clearing hydration", e);
+  }
+}
+
+const WELCOME_SEEN_KEY = "macrohonest_welcome_seen_v1";
+
+export function hasSeenWelcome(): boolean {
+  try {
+    return localStorage.getItem(WELCOME_SEEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setSeenWelcome(seen: boolean = true): void {
+  try {
+    localStorage.setItem(WELCOME_SEEN_KEY, seen ? "true" : "false");
+  } catch (e) {
+    console.error("Error saving welcome status", e);
+  }
+}
+
