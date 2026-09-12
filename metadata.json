@@ -1,0 +1,10 @@
+{
+  "name": "MacroHonest",
+  "description": "A clean, lightning-fast, and transparent AI calorie and macro tracker without bloat, dark-pattern subscriptions, or ads.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
